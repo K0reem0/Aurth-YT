@@ -1,4 +1,5 @@
 const express = require("express");
+const axios = require("axios"); // Importing axios
 const ytdl = require("@distube/ytdl-core");
 const fs = require("fs");
 const path = require("path");
@@ -17,42 +18,16 @@ if (!fs.existsSync(OUTPUT_DIR)) {
   fs.mkdirSync(OUTPUT_DIR);
 }
 
-// Function to clear old files in the output directory
-const clearOldFiles = () => {
-  const now = Date.now();
-  const fiveMinutes = 5 * 60 * 1000;
-
-  fs.readdir(OUTPUT_DIR, (err, files) => {
-    if (err) {
-      console.error("Error reading output directory:", err);
-      return;
-    }
-
-    files.forEach((file) => {
-      const filePath = path.join(OUTPUT_DIR, file);
-      fs.stat(filePath, (err, stats) => {
-        if (err) {
-          console.error("Error getting file stats:", err);
-          return;
-        }
-
-        // Delete file if it's older than 5 minutes
-        if (now - stats.mtimeMs > fiveMinutes) {
-          fs.unlink(filePath, (err) => {
-            if (err) {
-              console.error("Error deleting file:", err);
-            } else {
-              console.log(`Deleted old file: ${filePath}`);
-            }
-          });
-        }
-      });
-    });
-  });
+// Example: Making an Axios request
+const headers = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+  "Accept-Language": "en-US,en;q=0.9",
 };
 
-// Schedule cleanup every 5 minutes
-setInterval(clearOldFiles, 5 * 60 * 1000);
+axios
+  .get("https://example.com", { headers })
+  .then((response) => console.log("Axios Response Data:", response.data))
+  .catch((error) => console.error("Axios Error:", error.message));
 
 // API endpoint to fetch video download link
 app.get("/api/getVideo", async (req, res) => {
