@@ -5,7 +5,8 @@ const path = require("path");
 const fluentFfmpeg = require("fluent-ffmpeg");
 const ffmpegPath = require("ffmpeg-static");
 
-fluentFfmpeg.setFfmpegPath(ffmpegPath); // Set ffmpeg path to the static binary
+// Set ffmpeg path to the static binary
+fluentFfmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
 app.use(express.json());
@@ -17,42 +18,17 @@ if (!fs.existsSync(OUTPUT_DIR)) {
   fs.mkdirSync(OUTPUT_DIR);
 }
 
-// Function to clear old files in the output directory
-const clearOldFiles = () => {
-  const now = Date.now();
-  const fiveMinutes = 5 * 60 * 1000;
-
+// Clear the downloads directory every 5 minutes
+setInterval(() => {
   fs.readdir(OUTPUT_DIR, (err, files) => {
-    if (err) {
-      console.error("Error reading output directory:", err);
-      return;
-    }
-
+    if (err) return console.error("Error reading download directory:", err);
     files.forEach((file) => {
-      const filePath = path.join(OUTPUT_DIR, file);
-      fs.stat(filePath, (err, stats) => {
-        if (err) {
-          console.error("Error getting file stats:", err);
-          return;
-        }
-
-        // Delete file if it's older than 5 minutes
-        if (now - stats.mtimeMs > fiveMinutes) {
-          fs.unlink(filePath, (err) => {
-            if (err) {
-              console.error("Error deleting file:", err);
-            } else {
-              console.log(`Deleted old file: ${filePath}`);
-            }
-          });
-        }
+      fs.unlink(path.join(OUTPUT_DIR, file), (err) => {
+        if (err) console.error("Error deleting file:", err);
       });
     });
   });
-};
-
-// Schedule cleanup every 5 minutes
-setInterval(clearOldFiles, 5 * 60 * 1000);
+}, 5 * 60 * 1000); // 5 minutes
 
 // API endpoint to fetch video download link
 app.get("/api/getVideo", async (req, res) => {
@@ -66,18 +42,23 @@ app.get("/api/getVideo", async (req, res) => {
     // Validate the video URL
     const isValid = ytdl.validateURL(videoUrl);
     if (!isValid) {
-      return res.status(400).json({ error: "Invalid video URL. Please check the URL and try again." });
+      return res
+        .status(400)
+        .json({ error: "Invalid video URL. Please check the URL and try again." });
     }
 
     // Fetch video info
     const videoInfo = await ytdl.getInfo(videoUrl);
     const videoId = videoInfo.videoDetails.videoId;
-    const title = videoInfo.videoDetails.title.replace(/[\/\\?%*:|"<>]/g, ""); // Sanitize title for filesystem
+    const title = videoInfo.videoDetails.title.replace(
+      /[\/\\?%*:|"<>]/g,
+      ""
+    ); // Sanitize title for filesystem
     const videoPath = path.join(OUTPUT_DIR, `${title}_video.mp4`);
     const audioPath = path.join(OUTPUT_DIR, `${title}_audio.mp4`);
     const outputPath = path.join(OUTPUT_DIR, `${title}.mp4`);
 
-    // Download video and audio
+    // Download video and audio streams
     const videoStream = ytdl(videoUrl, { quality: "highestvideo" });
     const audioStream = ytdl(videoUrl, { quality: "highestaudio" });
 
@@ -110,7 +91,9 @@ app.get("/api/getVideo", async (req, res) => {
         fs.unlinkSync(audioPath);
 
         // Provide the download link
-        const downloadUrl = `${req.protocol}://${req.get("host")}/downloads/${path.basename(outputPath)}`;
+        const downloadUrl = `${req.protocol}://${req.get(
+          "host"
+        )}/downloads/${path.basename(outputPath)}`;
         res.status(200).json({
           status: true,
           creator: "AURTHER~آرثر",
@@ -137,6 +120,17 @@ app.get("/api/getVideo", async (req, res) => {
       .run();
   } catch (error) {
     console.error("Error processing video:", error.message);
+
+    // Handle bot protection
+    if (
+      error.message.includes("confirm you’re not a bot") ||
+      error.message.includes("captcha")
+    ) {
+      return res
+        .status(403)
+        .json({ error: "Bot protection triggered. Please try again later." });
+    }
+
     res.status(500).json({ error: "Something went wrong: " + error.message });
   }
 });
