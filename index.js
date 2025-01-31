@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const fluentFfmpeg = require("fluent-ffmpeg");
 const ffmpegPath = require("ffmpeg-static");
-const { exec } = require("child_process");
+const ytDlp = require("yt-dlp-exec"); // Use yt-dlp-exec instead of exec
 
 fluentFfmpeg.setFfmpegPath(ffmpegPath);
 
@@ -13,42 +13,30 @@ app.use(express.json());
 const OUTPUT_DIR = path.join(__dirname, "downloads");
 const COOKIES_PATH = path.join(__dirname, "cookies.txt");
 
-// Ensure the output directory exists
 if (!fs.existsSync(OUTPUT_DIR)) {
   fs.mkdirSync(OUTPUT_DIR);
 }
 
-// Function to clear old files in the output directory
-const clearOldFiles = () => {
+const clearOldFiles = async () => {
   const now = Date.now();
   const fiveMinutes = 5 * 60 * 1000;
-
-  fs.readdir(OUTPUT_DIR, (err, files) => {
-    if (err) {
-      console.error("Error reading output directory:", err);
-      return;
-    }
-
-    files.forEach((file) => {
-      const filePath = path.join(OUTPUT_DIR, file);
-      fs.stat(filePath, (err, stats) => {
-        if (err) {
-          console.error("Error getting file stats:", err);
-          return;
-        }
-
+  try {
+    const files = await fs.promises.readdir(OUTPUT_DIR);
+    await Promise.all(
+      files.map(async (file) => {
+        const filePath = path.join(OUTPUT_DIR, file);
+        const stats = await fs.promises.stat(filePath);
         if (now - stats.mtimeMs > fiveMinutes) {
-          fs.unlink(filePath, (err) => {
-            if (err) console.error("Error deleting file:", err);
-            else console.log(`Deleted old file: ${filePath}`);
-          });
+          await fs.promises.unlink(filePath);
+          console.log(`Deleted old file: ${filePath}`);
         }
-      });
-    });
-  });
+      })
+    );
+  } catch (err) {
+    console.error("Error clearing old files:", err);
+  }
 };
 
-// Schedule cleanup every 5 minutes
 setInterval(clearOldFiles, 5 * 60 * 1000);
 
 // API endpoint to fetch video download link
@@ -60,32 +48,22 @@ app.get("/api/getVideo", async (req, res) => {
   }
 
   try {
-    // Generate file names
-    const sanitizedTitle = `video_${Date.now()}`; // Unique file name
+    const sanitizedTitle = `video_${Date.now()}`;
     const videoPath = path.join(OUTPUT_DIR, `${sanitizedTitle}_video.mp4`);
     const audioPath = path.join(OUTPUT_DIR, `${sanitizedTitle}_audio.mp4`);
     const outputPath = path.join(OUTPUT_DIR, `${sanitizedTitle}.mp4`);
 
-    // Download video and audio separately using yt-dlp
-    const ytDlpBaseCommand = `yt-dlp --cookies "${COOKIES_PATH}" -f`;
-
-    const videoCommand = `${ytDlpBaseCommand} "bestvideo" -o "${videoPath}" "${videoUrl}"`;
-    const audioCommand = `${ytDlpBaseCommand} "bestaudio" -o "${audioPath}" "${videoUrl}"`;
-
+    // Download video and audio separately using yt-dlp-exec
     await Promise.all([
-      new Promise((resolve, reject) => {
-        exec(videoCommand, (error, stdout, stderr) => {
-          if (error) return reject(`Video download error: ${stderr}`);
-          console.log(stdout);
-          resolve();
-        });
+      ytDlp(videoUrl, {
+        format: "bestvideo",
+        output: videoPath,
+        cookies: COOKIES_PATH,
       }),
-      new Promise((resolve, reject) => {
-        exec(audioCommand, (error, stdout, stderr) => {
-          if (error) return reject(`Audio download error: ${stderr}`);
-          console.log(stdout);
-          resolve();
-        });
+      ytDlp(videoUrl, {
+        format: "bestaudio",
+        output: audioPath,
+        cookies: COOKIES_PATH,
       }),
     ]);
 
@@ -100,9 +78,7 @@ app.get("/api/getVideo", async (req, res) => {
         fs.unlinkSync(videoPath);
         fs.unlinkSync(audioPath);
 
-        const downloadUrl = `${req.protocol}://${req.get(
-          "host"
-        )}/downloads/${path.basename(outputPath)}`;
+        const downloadUrl = `${req.protocol}://${req.get("host")}/downloads/${path.basename(outputPath)}`;
         res.status(200).json({
           status: true,
           creator: "AURTHER~آرثر",
@@ -126,12 +102,16 @@ app.get("/api/getVideo", async (req, res) => {
       .run();
   } catch (error) {
     console.error("Error processing video:", error);
-    res.status(500).json({ error: "Something went wrong: " + error });
+    res.status(500).json({ error: "Something went wrong: " + error.message });
   }
 });
 
 // Serve the merged files
-app.use("/downloads", express.static(OUTPUT_DIR));
+app.use("/downloads", express.static(OUTPUT_DIR, {
+  setHeaders: (res, filePath) => {
+    res.setHeader("Content-Disposition", `attachment; filename="${path.basename(filePath)}"`);
+  },
+}));
 
 // Root endpoint for health check
 app.get("/", (req, res) => {
