@@ -53,53 +53,51 @@ app.get("/api/getVideo", async (req, res) => {
     const audioPath = path.join(OUTPUT_DIR, `${sanitizedTitle}_audio.mp4`);
     const outputPath = path.join(OUTPUT_DIR, `${sanitizedTitle}.mp4`);
 
-    // Download video and audio separately using yt-dlp-exec
+    // Download 720p video and best audio separately using yt-dlp
     await Promise.all([
-      ytDlp(videoUrl, {
-        format: "bestvideo",
-        output: videoPath,
-        cookies: COOKIES_PATH,
-      }),
-      ytDlp(videoUrl, {
-        format: "bestaudio",
-        output: audioPath,
-        cookies: COOKIES_PATH,
-      }),
+      ytDlp.exec(videoUrl, { format: "bestvideo[height<=720]", output: videoPath, cookies: COOKIES_PATH }),
+      ytDlp.exec(videoUrl, { format: "bestaudio", output: audioPath, cookies: COOKIES_PATH }),
     ]);
 
     // Merge video and audio using fluent-ffmpeg
-    fluentFfmpeg()
-      .input(videoPath)
-      .input(audioPath)
-      .audioCodec("aac")
-      .videoCodec("copy")
-      .output(outputPath)
-      .on("end", () => {
-        fs.unlinkSync(videoPath);
-        fs.unlinkSync(audioPath);
+    await new Promise((resolve, reject) => {
+      fluentFfmpeg()
+        .input(videoPath)
+        .input(audioPath)
+        .audioCodec("aac")
+        .videoCodec("copy")
+        .output(outputPath)
+        .on("end", resolve)
+        .on("error", reject)
+        .run();
+    });
 
-        const downloadUrl = `${req.protocol}://${req.get("host")}/downloads/${path.basename(outputPath)}`;
-        res.status(200).json({
-          status: true,
-          creator: "AURTHER~آرثر",
-          process: Math.random().toFixed(4),
-          data: {
-            title: sanitizedTitle,
-            media: {
-              type: "video",
-              download: {
-                url: downloadUrl,
-                format: "mp4",
-              },
-            },
+    // Cleanup temporary files
+    fs.unlinkSync(videoPath);
+    fs.unlinkSync(audioPath);
+
+    // Generate download URL
+    const downloadUrl = `${req.protocol}://${req.get("host")}/downloads/${path.basename(outputPath)}`;
+
+    res.status(200).json({
+      status: true,
+      creator: "AURTHER~آرثر",
+      process: Math.random().toFixed(4),
+      data: {
+        title: sanitizedTitle,
+        media: {
+          type: "video",
+          download: {
+            url: downloadUrl,
+            format: "mp4",
+            quality: "720p",
           },
-        });
-      })
-      .on("error", (err) => {
-        console.error("Error merging video and audio:", err);
-        res.status(500).json({ error: "Failed to merge video and audio." });
-      })
-      .run();
+        },
+      },
+    });
+
+    // Clear old files only after processing a new video
+    clearOldFiles();
   } catch (error) {
     console.error("Error processing video:", error);
     res.status(500).json({ error: "Something went wrong: " + error.message });
