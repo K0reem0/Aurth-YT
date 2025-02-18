@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const fluentFfmpeg = require("fluent-ffmpeg");
 const ffmpegPath = require("ffmpeg-static");
-const { spawn } = require("child_process"); // Use child_process.spawn
+const ytDlp = require("yt-dlp-exec"); // Use yt-dlp-exec instead of exec
 
 fluentFfmpeg.setFfmpegPath(ffmpegPath);
 
@@ -39,33 +39,6 @@ const clearOldFiles = async () => {
 
 setInterval(clearOldFiles, 5 * 60 * 1000);
 
-// Helper function to run yt-dlp
-const runYtDlp = (url, options) => {
-  return new Promise((resolve, reject) => {
-    const args = [url, ...options];
-    const ytDlpProcess = spawn("yt-dlp", args);
-
-    let stdout = "";
-    let stderr = "";
-
-    ytDlpProcess.stdout.on("data", (data) => {
-      stdout += data.toString();
-    });
-
-    ytDlpProcess.stderr.on("data", (data) => {
-      stderr += data.toString();
-    });
-
-    ytDlpProcess.on("close", (code) => {
-      if (code === 0) {
-        resolve(stdout.trim());
-      } else {
-        reject(new Error(stderr.trim()));
-      }
-    });
-  });
-};
-
 // API endpoint to fetch video download link
 app.get("/api/getVideo", async (req, res) => {
   const videoUrl = req.query.url;
@@ -82,16 +55,8 @@ app.get("/api/getVideo", async (req, res) => {
 
     // Download 720p video and best audio separately using yt-dlp
     await Promise.all([
-      runYtDlp(videoUrl, [
-        "-f", "bestvideo[height<=720]",
-        "-o", videoPath,
-        "--cookies", COOKIES_PATH,
-      ]),
-      runYtDlp(videoUrl, [
-        "-f", "bestaudio",
-        "-o", audioPath,
-        "--cookies", COOKIES_PATH,
-      ]),
+      ytDlp.exec(videoUrl, { format: "bestvideo[height<=720]", output: videoPath, cookies: COOKIES_PATH }),
+      ytDlp.exec(videoUrl, { format: "bestaudio", output: audioPath, cookies: COOKIES_PATH }),
     ]);
 
     // Merge video and audio using fluent-ffmpeg
