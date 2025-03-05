@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const fluentFfmpeg = require("fluent-ffmpeg");
 const ffmpegPath = require("ffmpeg-static");
-const ytDlp = require("yt-dlp-exec"); // Use yt-dlp-exec instead of exec
+const ytDlp = require("yt-dlp-exec");
 
 fluentFfmpeg.setFfmpegPath(ffmpegPath);
 
@@ -49,32 +49,45 @@ app.get("/api/getVideo", async (req, res) => {
 
   try {
     const sanitizedTitle = `video_${Date.now()}`;
-    const videoPath = path.join(OUTPUT_DIR, `${sanitizedTitle}_video.mp4`);
-    const audioPath = path.join(OUTPUT_DIR, `${sanitizedTitle}_audio.mp4`);
     const outputPath = path.join(OUTPUT_DIR, `${sanitizedTitle}.mp4`);
 
-    // Download 720p video and best audio separately using yt-dlp
-    await Promise.all([
-      ytDlp.exec(videoUrl, { format: "bestvideo[height<=720]", output: videoPath, cookies: COOKIES_PATH }),
-      ytDlp.exec(videoUrl, { format: "bestaudio", output: audioPath, cookies: COOKIES_PATH }),
-    ]);
+    // Check if the URL is from TikTok, Facebook, Instagram, Twitter, or other platforms
+    const isTikTok = videoUrl.includes("tiktok.com");
+    const isFacebook = videoUrl.includes("facebook.com") || videoUrl.includes("fb.watch");
+    const isInstagram = videoUrl.includes("instagram.com");
+    const isTwitter = videoUrl.includes("twitter.com") || videoUrl.includes("x.com");
 
-    // Merge video and audio using fluent-ffmpeg
-    await new Promise((resolve, reject) => {
-      fluentFfmpeg()
-        .input(videoPath)
-        .input(audioPath)
-        .audioCodec("aac")
-        .videoCodec("copy")
-        .output(outputPath)
-        .on("end", resolve)
-        .on("error", reject)
-        .run();
-    });
+    // Download video using yt-dlp
+    if (isTikTok || isFacebook || isInstagram || isTwitter) {
+      // For TikTok, Facebook, Instagram, and Twitter, download the best available format (usually video + audio combined)
+      await ytDlp.exec(videoUrl, { output: outputPath, cookies: COOKIES_PATH });
+    } else {
+      // For other platforms (e.g., YouTube), download video and audio separately
+      const videoPath = path.join(OUTPUT_DIR, `${sanitizedTitle}_video.mp4`);
+      const audioPath = path.join(OUTPUT_DIR, `${sanitizedTitle}_audio.mp4`);
 
-    // Cleanup temporary files
-    fs.unlinkSync(videoPath);
-    fs.unlinkSync(audioPath);
+      await Promise.all([
+        ytDlp.exec(videoUrl, { format: "bestvideo[height<=720]", output: videoPath, cookies: COOKIES_PATH }),
+        ytDlp.exec(videoUrl, { format: "bestaudio", output: audioPath, cookies: COOKIES_PATH }),
+      ]);
+
+      // Merge video and audio using fluent-ffmpeg
+      await new Promise((resolve, reject) => {
+        fluentFfmpeg()
+          .input(videoPath)
+          .input(audioPath)
+          .audioCodec("aac")
+          .videoCodec("copy")
+          .output(outputPath)
+          .on("end", resolve)
+          .on("error", reject)
+          .run();
+      });
+
+      // Cleanup temporary files
+      fs.unlinkSync(videoPath);
+      fs.unlinkSync(audioPath);
+    }
 
     // Generate download URL
     const downloadUrl = `${req.protocol}://${req.get("host")}/downloads/${path.basename(outputPath)}`;
@@ -90,14 +103,11 @@ app.get("/api/getVideo", async (req, res) => {
           download: {
             url: downloadUrl,
             format: "mp4",
-            quality: "720p",
+            quality: isTikTok || isFacebook || isInstagram || isTwitter ? "best" : "720p", // TikTok, Facebook, Instagram, and Twitter videos are usually single file
           },
         },
       },
     });
-
-    // Clear old files only after processing a new video
-    clearOldFiles();
   } catch (error) {
     console.error("Error processing video:", error);
     res.status(500).json({ error: "Something went wrong: " + error.message });
