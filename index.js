@@ -4,7 +4,8 @@ const path = require("path");
 const fluentFfmpeg = require("fluent-ffmpeg");
 const ffmpegPath = require("ffmpeg-static");
 const ytDlp = require("yt-dlp-exec");
-const puppeteer = require("puppeteer");
+const chromium = require("chrome-aws-lambda");
+const puppeteer = require("puppeteer-core");
 
 fluentFfmpeg.setFfmpegPath(ffmpegPath);
 
@@ -44,14 +45,17 @@ async function extractVideoFromPage(url) {
   console.log("Attempting to extract video from webpage...");
 
   try {
-    const browser = await puppeteer.launch({ headless: "new" });
-    const page = await browser.newPage();
+    const browser = await puppeteer.launch({
+      executablePath: await chromium.executablePath,
+      args: [...chromium.args, "--no-sandbox", "--disable-setuid-sandbox"],
+      headless: chromium.headless,
+    });
 
+    const page = await browser.newPage();
     await page.goto(url, { waitUntil: "networkidle2" });
 
     const videoUrls = await page.evaluate(() => {
-      const videos = document.querySelectorAll("video");
-      return Array.from(videos).map(video => video.src).filter(src => src);
+      return Array.from(document.querySelectorAll("video")).map(video => video.src).filter(src => src);
     });
 
     await browser.close();
