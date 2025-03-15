@@ -4,6 +4,7 @@ const path = require("path");
 const fluentFfmpeg = require("fluent-ffmpeg");
 const ffmpegPath = require("ffmpeg-static");
 const ytDlp = require("yt-dlp-exec");
+const puppeteer = require("puppeteer");
 
 fluentFfmpeg.setFfmpegPath(ffmpegPath);
 
@@ -39,9 +40,36 @@ const clearOldFiles = async () => {
 
 setInterval(clearOldFiles, 5 * 60 * 1000);
 
+async function extractVideoFromPage(url) {
+  console.log("Attempting to extract video from webpage...");
+
+  try {
+    const browser = await puppeteer.launch({ headless: "new" });
+    const page = await browser.newPage();
+
+    await page.goto(url, { waitUntil: "networkidle2" });
+
+    const videoUrls = await page.evaluate(() => {
+      const videos = document.querySelectorAll("video");
+      return Array.from(videos).map(video => video.src).filter(src => src);
+    });
+
+    await browser.close();
+
+    if (videoUrls.length > 0) {
+      console.log("Found video URLs:", videoUrls);
+      return videoUrls[0]; // Return the first video found
+    }
+  } catch (error) {
+    console.error("Error extracting video from page:", error);
+  }
+
+  return null;
+}
+
 // API endpoint to fetch video download link
 app.get("/api/getVideo", async (req, res) => {
-  const videoUrl = req.query.url;
+  let videoUrl = req.query.url;
 
   if (!videoUrl) {
     return res.status(400).json({ error: "No video URL provided." });
@@ -57,12 +85,20 @@ app.get("/api/getVideo", async (req, res) => {
     const isInstagram = videoUrl.includes("instagram.com");
     const isTwitter = videoUrl.includes("twitter.com") || videoUrl.includes("x.com");
 
+    // If the URL is not from a known platform, try extracting video from webpage
+    if (!isTikTok && !isFacebook && !isInstagram && !isTwitter && !videoUrl.includes("youtube.com")) {
+      const extractedVideoUrl = await extractVideoFromPage(videoUrl);
+      if (extractedVideoUrl) {
+        videoUrl = extractedVideoUrl;
+      } else {
+        return res.status(400).json({ error: "No downloadable video found on the webpage." });
+      }
+    }
+
     // Download video using yt-dlp
     if (isTikTok || isFacebook || isInstagram || isTwitter) {
-      // For TikTok, Facebook, Instagram, and Twitter, download the best available format (usually video + audio combined)
       await ytDlp.exec(videoUrl, { output: outputPath, cookies: COOKIES_PATH });
     } else {
-      // For other platforms (e.g., YouTube), download video and audio separately
       const videoPath = path.join(OUTPUT_DIR, `${sanitizedTitle}_video.mp4`);
       const audioPath = path.join(OUTPUT_DIR, `${sanitizedTitle}_audio.mp4`);
 
@@ -71,7 +107,6 @@ app.get("/api/getVideo", async (req, res) => {
         ytDlp.exec(videoUrl, { format: "bestaudio", output: audioPath, cookies: COOKIES_PATH }),
       ]);
 
-      // Merge video and audio using fluent-ffmpeg
       await new Promise((resolve, reject) => {
         fluentFfmpeg()
           .input(videoPath)
@@ -84,12 +119,10 @@ app.get("/api/getVideo", async (req, res) => {
           .run();
       });
 
-      // Cleanup temporary files
       fs.unlinkSync(videoPath);
       fs.unlinkSync(audioPath);
     }
 
-    // Generate download URL
     const downloadUrl = `${req.protocol}://${req.get("host")}/downloads/${path.basename(outputPath)}`;
 
     res.status(200).json({
@@ -103,7 +136,7 @@ app.get("/api/getVideo", async (req, res) => {
           download: {
             url: downloadUrl,
             format: "mp4",
-            quality: isTikTok || isFacebook || isInstagram || isTwitter ? "best" : "720p", // TikTok, Facebook, Instagram, and Twitter videos are usually single file
+            quality: isTikTok || isFacebook || isInstagram || isTwitter ? "best" : "720p",
           },
         },
       },
