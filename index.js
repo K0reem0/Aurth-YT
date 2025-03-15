@@ -4,8 +4,8 @@ const path = require("path");
 const fluentFfmpeg = require("fluent-ffmpeg");
 const ffmpegPath = require("ffmpeg-static");
 const ytDlp = require("yt-dlp-exec");
-const chromium = require("chrome-aws-lambda");
 const puppeteer = require("puppeteer-core");
+const chromium = require("chrome-aws-lambda");
 
 fluentFfmpeg.setFfmpegPath(ffmpegPath);
 
@@ -19,6 +19,7 @@ if (!fs.existsSync(OUTPUT_DIR)) {
   fs.mkdirSync(OUTPUT_DIR);
 }
 
+// تنظيف الملفات القديمة كل 5 دقائق
 const clearOldFiles = async () => {
   const now = Date.now();
   const fiveMinutes = 5 * 60 * 1000;
@@ -41,37 +42,41 @@ const clearOldFiles = async () => {
 
 setInterval(clearOldFiles, 5 * 60 * 1000);
 
+// وظيفة استخراج رابط الفيديو من صفحات الويب
 async function extractVideoFromPage(url) {
-  console.log("Attempting to extract video from webpage...");
-
+  let browser;
   try {
-    const browser = await puppeteer.launch({
+    browser = await puppeteer.launch({
+      args: chromium.args,
       executablePath: await chromium.executablePath,
-      args: [...chromium.args, "--no-sandbox", "--disable-setuid-sandbox"],
       headless: chromium.headless,
     });
 
     const page = await browser.newPage();
     await page.goto(url, { waitUntil: "networkidle2" });
 
-    const videoUrls = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll("video")).map(video => video.src).filter(src => src);
+    // البحث عن الفيديو في الصفحة
+    const videoSrc = await page.evaluate(() => {
+      const video = document.querySelector("video");
+      return video ? video.src : null;
     });
 
-    await browser.close();
-
-    if (videoUrls.length > 0) {
-      console.log("Found video URLs:", videoUrls);
-      return videoUrls[0]; // Return the first video found
+    if (!videoSrc) {
+      throw new Error("لم يتم العثور على فيديو في الصفحة.");
     }
+
+    return videoSrc;
   } catch (error) {
     console.error("Error extracting video from page:", error);
+    throw error;
+  } finally {
+    if (browser) {
+      await browser.close();
+    }
   }
-
-  return null;
 }
 
-// API endpoint to fetch video download link
+// API لتحميل الفيديو
 app.get("/api/getVideo", async (req, res) => {
   let videoUrl = req.query.url;
 
@@ -83,26 +88,23 @@ app.get("/api/getVideo", async (req, res) => {
     const sanitizedTitle = `video_${Date.now()}`;
     const outputPath = path.join(OUTPUT_DIR, `${sanitizedTitle}.mp4`);
 
-    // Check if the URL is from TikTok, Facebook, Instagram, Twitter, or other platforms
-    const isTikTok = videoUrl.includes("tiktok.com");
-    const isFacebook = videoUrl.includes("facebook.com") || videoUrl.includes("fb.watch");
-    const isInstagram = videoUrl.includes("instagram.com");
-    const isTwitter = videoUrl.includes("twitter.com") || videoUrl.includes("x.com");
-
-    // If the URL is not from a known platform, try extracting video from webpage
-    if (!isTikTok && !isFacebook && !isInstagram && !isTwitter && !videoUrl.includes("youtube.com")) {
-      const extractedVideoUrl = await extractVideoFromPage(videoUrl);
-      if (extractedVideoUrl) {
-        videoUrl = extractedVideoUrl;
-      } else {
-        return res.status(400).json({ error: "No downloadable video found on the webpage." });
+    // إذا كان الرابط لصفحة ويب، حاول استخراج رابط الفيديو أولاً
+    if (!videoUrl.match(/\.(mp4|m3u8|mov|webm)$/i)) {
+      try {
+        videoUrl = await extractVideoFromPage(videoUrl);
+      } catch (err) {
+        return res.status(400).json({ error: "لا يمكن استخراج الفيديو من الصفحة." });
       }
     }
 
-    // Download video using yt-dlp
-    if (isTikTok || isFacebook || isInstagram || isTwitter) {
+    // تحديد نوع المنصة
+    const isSocialMedia = ["tiktok.com", "facebook.com", "fb.watch", "instagram.com", "twitter.com", "x.com"]
+      .some(domain => videoUrl.includes(domain));
+
+    if (isSocialMedia) {
       await ytDlp.exec(videoUrl, { output: outputPath, cookies: COOKIES_PATH });
     } else {
+      // تحميل الفيديو والصوت بشكل منفصل إذا لم يكن من منصات التواصل
       const videoPath = path.join(OUTPUT_DIR, `${sanitizedTitle}_video.mp4`);
       const audioPath = path.join(OUTPUT_DIR, `${sanitizedTitle}_audio.mp4`);
 
@@ -111,6 +113,7 @@ app.get("/api/getVideo", async (req, res) => {
         ytDlp.exec(videoUrl, { format: "bestaudio", output: audioPath, cookies: COOKIES_PATH }),
       ]);
 
+      // دمج الفيديو والصوت
       await new Promise((resolve, reject) => {
         fluentFfmpeg()
           .input(videoPath)
@@ -123,10 +126,12 @@ app.get("/api/getVideo", async (req, res) => {
           .run();
       });
 
+      // حذف الملفات المؤقتة
       fs.unlinkSync(videoPath);
       fs.unlinkSync(audioPath);
     }
 
+    // توليد رابط التحميل
     const downloadUrl = `${req.protocol}://${req.get("host")}/downloads/${path.basename(outputPath)}`;
 
     res.status(200).json({
@@ -140,7 +145,7 @@ app.get("/api/getVideo", async (req, res) => {
           download: {
             url: downloadUrl,
             format: "mp4",
-            quality: isTikTok || isFacebook || isInstagram || isTwitter ? "best" : "720p",
+            quality: isSocialMedia ? "best" : "720p",
           },
         },
       },
@@ -151,19 +156,19 @@ app.get("/api/getVideo", async (req, res) => {
   }
 });
 
-// Serve the merged files
+// تقديم الملفات للتحميل
 app.use("/downloads", express.static(OUTPUT_DIR, {
   setHeaders: (res, filePath) => {
     res.setHeader("Content-Disposition", `attachment; filename="${path.basename(filePath)}"`);
   },
 }));
 
-// Root endpoint for health check
+// فحص الصحة
 app.get("/", (req, res) => {
   res.send("آرثر هنا كل شيء يعمل بخير!");
 });
 
-// Start the server
+// تشغيل السيرفر
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
