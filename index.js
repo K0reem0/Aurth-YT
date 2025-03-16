@@ -4,8 +4,6 @@ const path = require("path");
 const fluentFfmpeg = require("fluent-ffmpeg");
 const ffmpegPath = require("ffmpeg-static");
 const ytDlp = require("yt-dlp-exec");
-const chromium = require("chrome-aws-lambda");
-const puppeteer = require("puppeteer-core");
 
 fluentFfmpeg.setFfmpegPath(ffmpegPath);
 
@@ -115,41 +113,6 @@ app.get("/api/getVideo", async (req, res) => {
     res.status(500).json({ error: "Something went wrong: " + error.message });
   }
 });
-
-// Function to extract video URL from a webpage using Puppeteer and chrome-aws-lambda
-async function extractVideoFromPage(url) {
-  let browser;
-  try {
-    const executablePath = await chromium.executablePath || "/usr/bin/google-chrome-stable";
-
-    browser = await puppeteer.launch({
-      args: chromium.args,
-      executablePath: executablePath,
-      headless: chromium.headless,
-    });
-
-    const page = await browser.newPage();
-    await page.goto(url, { waitUntil: "networkidle2" });
-
-    const videoSrc = await page.evaluate(() => {
-      const video = document.querySelector("video");
-      return video ? video.src : null;
-    });
-
-    if (!videoSrc) {
-      throw new Error("لم يتم العثور على فيديو في الصفحة.");
-    }
-
-    return videoSrc;
-  } catch (error) {
-    console.error("Error extracting video from page:", error);
-    throw error;
-  } finally {
-    if (browser) {
-      await browser.close();
-    }
-  }
-}
 
 // Serve the merged files
 app.use("/downloads", express.static(OUTPUT_DIR, {
