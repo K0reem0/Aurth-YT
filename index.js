@@ -53,9 +53,11 @@ app.get("/api/getVideo", async (req, res) => {
 
     // Check if the URL is from TikTok, Facebook, Instagram, Twitter, or other platforms
     const isTikTok = videoUrl.includes("tiktok.com");
-    const isFacebook = videoUrl.includes("facebook.com") || videoUrl.includes("fb.watch");
+    const isFacebook =
+      videoUrl.includes("facebook.com") || videoUrl.includes("fb.watch");
     const isInstagram = videoUrl.includes("instagram.com");
-    const isTwitter = videoUrl.includes("twitter.com") || videoUrl.includes("x.com");
+    const isTwitter =
+      videoUrl.includes("twitter.com") || videoUrl.includes("x.com");
 
     // Download video using yt-dlp
     if (isTikTok || isFacebook || isInstagram || isTwitter) {
@@ -67,8 +69,16 @@ app.get("/api/getVideo", async (req, res) => {
       const audioPath = path.join(OUTPUT_DIR, `${sanitizedTitle}_audio.mp4`);
 
       await Promise.all([
-        ytDlp.exec(videoUrl, { format: "bestvideo[height<=720]", output: videoPath, cookies: COOKIES_PATH }),
-        ytDlp.exec(videoUrl, { format: "bestaudio", output: audioPath, cookies: COOKIES_PATH }),
+        ytDlp.exec(videoUrl, {
+          format: "bestvideo[height<=720]",
+          output: videoPath,
+          cookies: COOKIES_PATH,
+        }),
+        ytDlp.exec(videoUrl, {
+          format: "bestaudio",
+          output: audioPath,
+          cookies: COOKIES_PATH,
+        }),
       ]);
 
       // Merge video and audio using fluent-ffmpeg
@@ -90,7 +100,9 @@ app.get("/api/getVideo", async (req, res) => {
     }
 
     // Generate download URL
-    const downloadUrl = `${req.protocol}://${req.get("host")}/downloads/${path.basename(outputPath)}`;
+    const downloadUrl = `${req.protocol}://${req.get(
+      "host"
+    )}/downloads/${path.basename(outputPath)}`;
 
     res.status(200).json({
       status: true,
@@ -103,7 +115,10 @@ app.get("/api/getVideo", async (req, res) => {
           download: {
             url: downloadUrl,
             format: "mp4",
-            quality: isTikTok || isFacebook || isInstagram || isTwitter ? "best" : "720p", // TikTok, Facebook, Instagram, and Twitter videos are usually single file
+            quality:
+              isTikTok || isFacebook || isInstagram || isTwitter
+                ? "best"
+                : "720p", // TikTok, Facebook, Instagram, and Twitter videos are usually single file
           },
         },
       },
@@ -115,11 +130,17 @@ app.get("/api/getVideo", async (req, res) => {
 });
 
 // Serve the merged files
-app.use("/downloads", express.static(OUTPUT_DIR, {
-  setHeaders: (res, filePath) => {
-    res.setHeader("Content-Disposition", `attachment; filename="${path.basename(filePath)}"`);
-  },
-}));
+app.use(
+  "/downloads",
+  express.static(OUTPUT_DIR, {
+    setHeaders: (res, filePath) => {
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="${path.basename(filePath)}"`
+      );
+    },
+  })
+);
 
 // Root endpoint for health check
 app.get("/", (req, res) => {
