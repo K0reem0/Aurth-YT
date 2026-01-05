@@ -57,7 +57,7 @@ const runYtDlp = (args) =>
 app.get("/api/getVideo", async (req, res) => {
   const videoUrl = req.query.url;
   // الجودة الافتراضية 480
-  const requestedRes = req.query.res || "480"; 
+  const requestedRes = req.query.res || "720"; 
 
   if (!videoUrl) {
     return res.status(400).json({ error: "No video URL provided" });
