@@ -10,21 +10,19 @@ fluentFfmpeg.setFfmpegPath(ffmpegPath);
 const app = express();
 app.use(express.json());
 
-/* المسارات */
+/* ================== الإعدادات ================== */
 const OUTPUT_DIR = path.join(__dirname, "downloads");
 const COOKIES_PATH = path.join(__dirname, "cookies.txt");
 const YTDLP_PATH = process.env.YTDLP_PATH || "yt-dlp";
 
-/* إنشاء مجلد التحميل */
 if (!fs.existsSync(OUTPUT_DIR)) {
   fs.mkdirSync(OUTPUT_DIR);
 }
 
-/* حذف الملفات القديمة (5 دقائق) */
+/* ================== تنظيف الملفات ================== */
 const clearOldFiles = async () => {
   const now = Date.now();
   const maxAge = 5 * 60 * 1000;
-
   try {
     const files = await fs.promises.readdir(OUTPUT_DIR);
     await Promise.all(
@@ -40,24 +38,26 @@ const clearOldFiles = async () => {
     console.error("Cleanup error:", err);
   }
 };
-
 setInterval(clearOldFiles, 5 * 60 * 1000);
 
-/* تشغيل yt-dlp */
+/* ================== تشغيل yt-dlp ================== */
 const runYtDlp = (args) =>
   new Promise((resolve, reject) => {
-    execFile(YTDLP_PATH, args, (error, stdout, stderr) => {
-      if (error) {
-        reject(new Error(stderr || error.message));
+    execFile(YTDLP_PATH, args, { maxBuffer: 1024 * 1024 * 10 }, (err, stdout, stderr) => {
+      if (err) {
+        reject(new Error(stderr || err.message));
       } else {
         resolve(stdout);
       }
     });
   });
 
-/* API */
+/* ================== API ================== */
 app.get("/api/getVideo", async (req, res) => {
   const videoUrl = req.query.url;
+  // استلام الدقة المطلوبة من المستخدم أو تعيين 720 كافتراضي
+  const requestedRes = req.query.res || "720"; 
+
   if (!videoUrl) {
     return res.status(400).json({ error: "No video URL provided" });
   }
@@ -67,46 +67,52 @@ app.get("/api/getVideo", async (req, res) => {
     const outputPath = path.join(OUTPUT_DIR, `${title}.mp4`);
 
     const isTikTok = videoUrl.includes("tiktok.com");
-    const isFacebook =
-      videoUrl.includes("facebook.com") || videoUrl.includes("fb.watch");
     const isInstagram = videoUrl.includes("instagram.com");
-    const isTwitter =
-      videoUrl.includes("twitter.com") || videoUrl.includes("x.com");
+    const isFacebook = videoUrl.includes("facebook.com") || videoUrl.includes("fb.watch");
+    const isTwitter = videoUrl.includes("twitter.com") || videoUrl.includes("x.com");
 
-    /* منصات بملف واحد */
-    if (isTikTok || isFacebook || isInstagram || isTwitter) {
+    let formatSelection = "";
+
+    if (isTikTok || isInstagram) {
+      /* المنطق:
+         1. ابحث عن فيديو بالدقة المطلوبة (مثلاً 720) وحجمه أقل من 25MB.
+         2. إذا لم يجد، ابحث عن أي فيديو جودته 480p أو أقل.
+         3. إذا لم يجد، حمل أفضل نسخة متاحة.
+      */
+      formatSelection = `best[height<=${requestedRes}][filesize<25M]/best[height<=480]/best`;
+    } else if (isFacebook || isTwitter) {
+      formatSelection = `best[height<=${requestedRes}]/best`;
+    }
+
+    /* ===== معالجة المنصات (TikTok, Insta, FB, Twitter) ===== */
+    if (isTikTok || isInstagram || isFacebook || isTwitter) {
       await runYtDlp([
         videoUrl,
-        "-f",
-        "best",
-        "-o",
-        outputPath,
-        "--cookies",
-        COOKIES_PATH,
+        "-f", formatSelection,
+        "-o", outputPath,
+        "--merge-output-format", "mp4",
+        "--cookies", COOKIES_PATH,
+        "--no-playlist",
       ]);
     } else {
-      /* يوتيوب: فيديو + صوت */
+      /* ===== YouTube: فيديو + صوت ===== */
       const videoPath = path.join(OUTPUT_DIR, `${title}_video.mp4`);
       const audioPath = path.join(OUTPUT_DIR, `${title}_audio.m4a`);
 
       await Promise.all([
         runYtDlp([
           videoUrl,
-          "-f",
-          "bestvideo[height<=720]",
-          "-o",
-          videoPath,
-          "--cookies",
-          COOKIES_PATH,
+          "-f", `bestvideo[height<=${requestedRes}]+bestaudio/best[height<=${requestedRes}]`,
+          "-o", videoPath,
+          "--cookies", COOKIES_PATH,
+          "--no-playlist",
         ]),
         runYtDlp([
           videoUrl,
-          "-f",
-          "bestaudio",
-          "-o",
-          audioPath,
-          "--cookies",
-          COOKIES_PATH,
+          "-f", "bestaudio",
+          "-o", audioPath,
+          "--cookies", COOKIES_PATH,
+          "--no-playlist",
         ]),
       ]);
 
@@ -122,13 +128,11 @@ app.get("/api/getVideo", async (req, res) => {
           .run();
       });
 
-      fs.unlinkSync(videoPath);
-      fs.unlinkSync(audioPath);
+      if (fs.existsSync(videoPath)) fs.unlinkSync(videoPath);
+      if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath);
     }
 
-    const downloadUrl = `${req.protocol}://${req.get(
-      "host"
-    )}/downloads/${path.basename(outputPath)}`;
+    const downloadUrl = `${req.protocol}://${req.get("host")}/downloads/${path.basename(outputPath)}`;
 
     res.json({
       status: true,
@@ -140,10 +144,7 @@ app.get("/api/getVideo", async (req, res) => {
           download: {
             url: downloadUrl,
             format: "mp4",
-            quality:
-              isTikTok || isFacebook || isInstagram || isTwitter
-                ? "best"
-                : "720p",
+            requested_resolution: requestedRes,
           },
         },
       },
@@ -154,36 +155,9 @@ app.get("/api/getVideo", async (req, res) => {
   }
 });
 
-/* اختبار yt-dlp */
-app.get("/test-ytdlp", async (req, res) => {
-  try {
-    const version = await runYtDlp(["--version"]);
-    res.send(`yt-dlp يعمل ✅ (${version.trim()})`);
-  } catch {
-    res.status(500).send("yt-dlp لا يعمل ❌");
-  }
-});
+/* ... باقي الكود (test-ytdlp, static files, server listen) ... */
+app.get("/", (req, res) => res.send("آرثر هنا — الأنظمة تعمل ✅"));
+app.use("/downloads", express.static(OUTPUT_DIR));
 
-/* تقديم الملفات */
-app.use(
-  "/downloads",
-  express.static(OUTPUT_DIR, {
-    setHeaders: (res, filePath) => {
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename="${path.basename(filePath)}"`
-      );
-    },
-  })
-);
-
-/* فحص الصحة */
-app.get("/", (req, res) => {
-  res.send("آرثر هنا — كل شيء يعمل تمامًا ✅");
-});
-
-/* تشغيل السيرفر */
 const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-});
+app.listen(port, () => console.log(`Server running on port ${port}`));
