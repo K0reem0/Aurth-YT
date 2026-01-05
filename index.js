@@ -1,57 +1,71 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
+const { execFile } = require("child_process");
 const fluentFfmpeg = require("fluent-ffmpeg");
 const ffmpegPath = require("ffmpeg-static");
-const ytDlp = require("yt-dlp-exec");
 
 fluentFfmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
 app.use(express.json());
 
+/* المسارات */
 const OUTPUT_DIR = path.join(__dirname, "downloads");
 const COOKIES_PATH = path.join(__dirname, "cookies.txt");
+const YTDLP_PATH = process.env.YTDLP_PATH || "yt-dlp";
 
+/* إنشاء مجلد التحميل */
 if (!fs.existsSync(OUTPUT_DIR)) {
   fs.mkdirSync(OUTPUT_DIR);
 }
 
+/* حذف الملفات القديمة (5 دقائق) */
 const clearOldFiles = async () => {
   const now = Date.now();
-  const fiveMinutes = 5 * 60 * 1000;
+  const maxAge = 5 * 60 * 1000;
+
   try {
     const files = await fs.promises.readdir(OUTPUT_DIR);
     await Promise.all(
       files.map(async (file) => {
         const filePath = path.join(OUTPUT_DIR, file);
         const stats = await fs.promises.stat(filePath);
-        if (now - stats.mtimeMs > fiveMinutes) {
+        if (now - stats.mtimeMs > maxAge) {
           await fs.promises.unlink(filePath);
-          console.log(`Deleted old file: ${filePath}`);
         }
       })
     );
   } catch (err) {
-    console.error("Error clearing old files:", err);
+    console.error("Cleanup error:", err);
   }
 };
 
 setInterval(clearOldFiles, 5 * 60 * 1000);
 
-// API endpoint to fetch video download link
+/* تشغيل yt-dlp */
+const runYtDlp = (args) =>
+  new Promise((resolve, reject) => {
+    execFile(YTDLP_PATH, args, (error, stdout, stderr) => {
+      if (error) {
+        reject(new Error(stderr || error.message));
+      } else {
+        resolve(stdout);
+      }
+    });
+  });
+
+/* API */
 app.get("/api/getVideo", async (req, res) => {
   const videoUrl = req.query.url;
-
   if (!videoUrl) {
-    return res.status(400).json({ error: "No video URL provided." });
+    return res.status(400).json({ error: "No video URL provided" });
   }
 
   try {
-    const sanitizedTitle = `video_${Date.now()}`;
-    const outputPath = path.join(OUTPUT_DIR, `${sanitizedTitle}.mp4`);
+    const title = `video_${Date.now()}`;
+    const outputPath = path.join(OUTPUT_DIR, `${title}.mp4`);
 
-    // Check if the URL is from TikTok, Facebook, Instagram, Twitter, or other platforms
     const isTikTok = videoUrl.includes("tiktok.com");
     const isFacebook =
       videoUrl.includes("facebook.com") || videoUrl.includes("fb.watch");
@@ -59,57 +73,68 @@ app.get("/api/getVideo", async (req, res) => {
     const isTwitter =
       videoUrl.includes("twitter.com") || videoUrl.includes("x.com");
 
-    // Download video using yt-dlp
+    /* منصات بملف واحد */
     if (isTikTok || isFacebook || isInstagram || isTwitter) {
-      // For TikTok, Facebook, Instagram, and Twitter, download the best available format (usually video + audio combined)
-      await ytDlp.exec(videoUrl, { output: outputPath, cookies: COOKIES_PATH });
+      await runYtDlp([
+        videoUrl,
+        "-f",
+        "best",
+        "-o",
+        outputPath,
+        "--cookies",
+        COOKIES_PATH,
+      ]);
     } else {
-      // For other platforms (e.g., YouTube), download video and audio separately
-      const videoPath = path.join(OUTPUT_DIR, `${sanitizedTitle}_video.mp4`);
-      const audioPath = path.join(OUTPUT_DIR, `${sanitizedTitle}_audio.mp4`);
+      /* يوتيوب: فيديو + صوت */
+      const videoPath = path.join(OUTPUT_DIR, `${title}_video.mp4`);
+      const audioPath = path.join(OUTPUT_DIR, `${title}_audio.m4a`);
 
       await Promise.all([
-        ytDlp.exec(videoUrl, {
-          format: "bestvideo[height<=720]",
-          output: videoPath,
-          cookies: COOKIES_PATH,
-        }),
-        ytDlp.exec(videoUrl, {
-          format: "bestaudio",
-          output: audioPath,
-          cookies: COOKIES_PATH,
-        }),
+        runYtDlp([
+          videoUrl,
+          "-f",
+          "bestvideo[height<=720]",
+          "-o",
+          videoPath,
+          "--cookies",
+          COOKIES_PATH,
+        ]),
+        runYtDlp([
+          videoUrl,
+          "-f",
+          "bestaudio",
+          "-o",
+          audioPath,
+          "--cookies",
+          COOKIES_PATH,
+        ]),
       ]);
 
-      // Merge video and audio using fluent-ffmpeg
       await new Promise((resolve, reject) => {
         fluentFfmpeg()
           .input(videoPath)
           .input(audioPath)
-          .audioCodec("aac")
           .videoCodec("copy")
+          .audioCodec("aac")
           .output(outputPath)
           .on("end", resolve)
           .on("error", reject)
           .run();
       });
 
-      // Cleanup temporary files
       fs.unlinkSync(videoPath);
       fs.unlinkSync(audioPath);
     }
 
-    // Generate download URL
     const downloadUrl = `${req.protocol}://${req.get(
       "host"
     )}/downloads/${path.basename(outputPath)}`;
 
-    res.status(200).json({
+    res.json({
       status: true,
       creator: "AURTHER~آرثر",
-      process: Math.random().toFixed(4),
       data: {
-        title: sanitizedTitle,
+        title,
         media: {
           type: "video",
           download: {
@@ -118,18 +143,28 @@ app.get("/api/getVideo", async (req, res) => {
             quality:
               isTikTok || isFacebook || isInstagram || isTwitter
                 ? "best"
-                : "720p", // TikTok, Facebook, Instagram, and Twitter videos are usually single file
+                : "720p",
           },
         },
       },
     });
-  } catch (error) {
-    console.error("Error processing video:", error);
-    res.status(500).json({ error: "Something went wrong: " + error.message });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
   }
 });
 
-// Serve the merged files
+/* اختبار yt-dlp */
+app.get("/test-ytdlp", async (req, res) => {
+  try {
+    const version = await runYtDlp(["--version"]);
+    res.send(`yt-dlp يعمل ✅ (${version.trim()})`);
+  } catch {
+    res.status(500).send("yt-dlp لا يعمل ❌");
+  }
+});
+
+/* تقديم الملفات */
 app.use(
   "/downloads",
   express.static(OUTPUT_DIR, {
@@ -142,13 +177,13 @@ app.use(
   })
 );
 
-// Root endpoint for health check
+/* فحص الصحة */
 app.get("/", (req, res) => {
-  res.send("آرثر هنا كل شيء يعمل بخير!");
+  res.send("آرثر هنا — كل شيء يعمل تمامًا ✅");
 });
 
-// Start the server
+/* تشغيل السيرفر */
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
-  console.log(`Server is running on port ${port}`);
+  console.log(`Server running on port ${port}`);
 });
