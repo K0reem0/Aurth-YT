@@ -79,7 +79,7 @@ app.get("/api/getVideo", async (req, res) => {
          2. إذا لم يجد، ابحث عن أي فيديو جودته 480p أو أقل.
          3. إذا لم يجد، حمل أفضل نسخة متاحة.
       */
-      formatSelection = `best[height<=${requestedRes}][filesize<25M]/best[height<=480]/best`;
+      formatSelection = `best[height<=${requestedRes}][filesize<8]/best[height<=480]/best`;
     } else if (isFacebook || isTwitter) {
       formatSelection = `best[height<=${requestedRes}]/best`;
     }
