@@ -56,7 +56,7 @@ const runYtDlp = (args) =>
 app.get("/api/getVideo", async (req, res) => {
   const videoUrl = req.query.url;
   // استلام الدقة المطلوبة من المستخدم أو تعيين 720 كافتراضي
-  const requestedRes = req.query.res || "720"; 
+  const requestedRes = req.query.res || "480"; 
 
   if (!videoUrl) {
     return res.status(400).json({ error: "No video URL provided" });
